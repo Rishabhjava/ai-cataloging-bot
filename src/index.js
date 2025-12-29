@@ -61,6 +61,24 @@ bot.on('message', async (msg) => {
   if (!messageText) return;
 
   try {
+    // Handle special commands first (these work regardless of session state)
+    if (messageText.toLowerCase() === '/start' || messageText.toLowerCase() === '/restart') {
+      userSessions.delete(chatId); // Clear any existing session
+      await sendWelcomeMessage(chatId);
+      return;
+    }
+
+    if (messageText.toLowerCase() === '/help') {
+      await sendHelpMessage(chatId);
+      return;
+    }
+
+    if (messageText.toLowerCase() === 'exit' || messageText.toLowerCase() === '/exit' || messageText.toLowerCase() === '/cancel') {
+      userSessions.delete(chatId); // Clear session
+      await bot.sendMessage(chatId, '✅ Session cleared! Send me a link or type /start to begin again.');
+      return;
+    }
+
     // Handle category selection if user is in session
     if (userSessions.has(chatId)) {
       await handleCategorySelection(chatId, messageText);
@@ -74,7 +92,8 @@ bot.on('message', async (msg) => {
     if (urls?.length > 0) {
       await processUrl(chatId, urls[0]);
     } else {
-      await sendWelcomeMessage(chatId);
+      // Handle general questions or provide guidance
+      await handleGeneralMessage(chatId, messageText);
     }
   } catch (error) {
     console.error('Error handling message:', error);
@@ -121,9 +140,120 @@ Send me any AI-related link and I'll automatically:
 • Categorize it (content, tools, prompts, people)  
 • Save it to your GitHub portfolio
 
-Just paste a link to get started!`;
+Just paste a link to get started!
+
+💡 **Commands:**
+• /help - Show all available commands
+• /restart - Start over 
+• exit - Cancel current operation`;
   
   await bot.sendMessage(chatId, welcomeText);
+}
+
+// Send help message
+async function sendHelpMessage(chatId) {
+  const helpText = `🤖 **AI Catalog Bot Help**
+
+**What I do:**
+I help you catalog AI-related content by extracting information from URLs and organizing them in your GitHub portfolio.
+
+**How to use:**
+1. Send me any AI-related link
+2. I'll extract the content and ask you to choose a category
+3. I'll save it to your GitHub repository
+
+**Categories:**
+📄 Content - Articles, papers, research
+🛠️ Tools - AI applications and services  
+💡 Prompts - Useful AI prompts
+👨‍💻 People - AI researchers and thought leaders
+
+**Commands:**
+• /start or /restart - Start over
+• /help - Show this help message
+• exit, /exit, /cancel - Cancel current operation
+• Just paste any URL to analyze it
+
+**Supported links:**
+• Websites, blogs, articles
+• Twitter/X posts
+• GitHub repositories
+• And more!`;
+
+  await bot.sendMessage(chatId, helpText);
+}
+
+// Handle general messages (non-URLs when not in session)
+async function handleGeneralMessage(chatId, messageText) {
+  const standardResponses = [
+    "I'm designed to catalog AI content from URLs. Please send me a link to get started! 🔗",
+    "Send me any AI-related URL and I'll help you catalog it. Type /help for more info! 💡",
+    "I can analyze AI content from links. Just paste any URL you'd like me to process! 🚀",
+    "To get started, send me a link to an AI tool, article, or resource you'd like to catalog! 📖"
+  ];
+  
+  // Check if it's a question about AI or the bot
+  const isQuestion = messageText.includes('?') || 
+                    messageText.toLowerCase().includes('how') || 
+                    messageText.toLowerCase().includes('what') ||
+                    messageText.toLowerCase().includes('why') ||
+                    messageText.toLowerCase().includes('when') ||
+                    messageText.toLowerCase().includes('where') ||
+                    messageText.toLowerCase().includes('help');
+  
+  const isAiRelated = messageText.toLowerCase().includes('ai') ||
+                      messageText.toLowerCase().includes('artificial intelligence') ||
+                      messageText.toLowerCase().includes('machine learning') ||
+                      messageText.toLowerCase().includes('ml') ||
+                      messageText.toLowerCase().includes('llm') ||
+                      messageText.toLowerCase().includes('chatgpt') ||
+                      messageText.toLowerCase().includes('openai') ||
+                      messageText.toLowerCase().includes('claude') ||
+                      messageText.toLowerCase().includes('bot');
+
+  if (isQuestion) {
+    if (isAiRelated) {
+      // Answer AI-related questions using OpenAI
+      await answerAiQuestion(chatId, messageText);
+    } else {
+      // Show help for bot-related questions
+      await sendHelpMessage(chatId);
+    }
+  } else {
+    // Random helpful response for non-questions
+    const randomResponse = standardResponses[Math.floor(Math.random() * standardResponses.length)];
+    await bot.sendMessage(chatId, randomResponse);
+  }
+}
+
+// Answer AI-related questions using OpenAI
+async function answerAiQuestion(chatId, question) {
+  try {
+    await bot.sendMessage(chatId, '🤔 Let me think about that...');
+    
+    const prompt = `You are an AI assistant helping users with AI-related questions. Please provide a helpful, accurate, and concise answer to this question: "${question}"
+    
+    Keep your response informative but not too long (2-3 paragraphs max). If the question is about AI cataloging or organizing AI resources, mention that the user can also send links for automatic cataloging.`;
+
+    const completion = await openai.chat.completions.create({
+      model: CONFIG.OPENAI.MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.3,
+      max_tokens: 500
+    });
+
+    const answer = completion.choices[0].message.content;
+    
+    await bot.sendMessage(chatId, `🤖 ${answer}
+
+💡 *Tip: You can also send me AI-related links to automatically catalog them!*`);
+    
+  } catch (error) {
+    console.error('Error answering AI question:', error);
+    await bot.sendMessage(chatId, `❌ Sorry, I couldn't process your question right now. 
+
+For now, you can send me AI-related links to catalog, or type /help to see what I can do!`);
+  }
 }
 
 async function handleCategorySelection(chatId, category) {
@@ -147,7 +277,16 @@ async function handleCategorySelection(chatId, category) {
       categoryKey = 'people';
       break;
     default:
-      await bot.sendMessage(chatId, '❌ Please select a valid category using the buttons.');
+      // More helpful error message with restart option
+      await bot.sendMessage(chatId, `❌ Please select a valid category using the buttons.
+
+Available options:
+📄 Content
+🛠️ Tools  
+💡 Prompts
+👨‍💻 People
+
+Type "exit" to cancel or /restart to start over.`);
       return;
   }
 
