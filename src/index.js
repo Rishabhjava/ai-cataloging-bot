@@ -23,10 +23,55 @@ const CONFIG = {
   }
 };
 
-// Initialize services
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const octokit = new Octokit({ auth: process.env.GITHUB_PAT });
+// Initialize services with error handling
+let bot, openai, octokit;
+
+try {
+  if (!process.env.TELEGRAM_BOT_TOKEN) {
+    console.warn('⚠️ TELEGRAM_BOT_TOKEN not found - bot polling disabled');
+  } else {
+    bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { 
+      polling: {
+        interval: 1000,
+        autoStart: true,
+        params: {
+          timeout: 10
+        }
+      }
+    });
+
+    // Add error handling for the bot
+    bot.on('polling_error', (error) => {
+      console.error('Polling error:', error);
+    });
+
+    bot.on('error', (error) => {
+      console.error('Bot error:', error);
+    });
+  }
+} catch (error) {
+  console.error('Failed to initialize Telegram bot:', error.message);
+}
+
+try {
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn('⚠️ OPENAI_API_KEY not found - AI features disabled');
+  } else {
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+} catch (error) {
+  console.error('Failed to initialize OpenAI:', error.message);
+}
+
+try {
+  if (!process.env.GITHUB_PAT) {
+    console.warn('⚠️ GITHUB_PAT not found - GitHub integration disabled');
+  } else {
+    octokit = new Octokit({ auth: process.env.GITHUB_PAT });
+  }
+} catch (error) {
+  console.error('Failed to initialize GitHub client:', error.message);
+}
 
 // Store user sessions for category selection
 const userSessions = new Map();
@@ -39,7 +84,16 @@ const server = http.createServer((req, res) => {
       status: 'OK', 
       service: 'AI Catalog Bot',
       uptime: process.uptime(),
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      services: {
+        telegram: !!bot,
+        openai: !!openai,
+        github: !!octokit
+      },
+      environment: {
+        node_version: process.version,
+        port: CONFIG.SERVER.PORT
+      }
     }));
   } else {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -47,13 +101,21 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(CONFIG.SERVER.PORT, () => {
+server.listen(CONFIG.SERVER.PORT, '0.0.0.0', () => {
   console.log(`🌐 Health check server running on port ${CONFIG.SERVER.PORT}`);
 });
 
+// Add startup verification
+console.log('🤖 AI Catalog Bot starting...');
+console.log('📋 Environment check:');
+console.log(`   PORT: ${CONFIG.SERVER.PORT}`);
+console.log(`   TELEGRAM_BOT_TOKEN: ${process.env.TELEGRAM_BOT_TOKEN ? '✅ Set' : '❌ Missing'}`);
+console.log(`   OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? '✅ Set' : '❌ Missing'}`);
+console.log(`   GITHUB_PAT: ${process.env.GITHUB_PAT ? '✅ Set' : '❌ Missing'}`);
 console.log('🤖 AI Catalog Bot started!');
 
 // Main message handler
+if (bot) {
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const messageText = msg.text;
@@ -100,6 +162,9 @@ bot.on('message', async (msg) => {
     await bot.sendMessage(chatId, '❌ Something went wrong. Please try again.');
   }
 });
+} else {
+  console.log('⚠️ Bot not initialized - message handling disabled');
+}
 
 // Process URL and extract content
 async function processUrl(chatId, url) {
@@ -229,6 +294,11 @@ async function handleGeneralMessage(chatId, messageText) {
 // Answer AI-related questions using OpenAI
 async function answerAiQuestion(chatId, question) {
   try {
+    if (!openai) {
+      await bot.sendMessage(chatId, '❌ AI question answering is currently unavailable. Environment variables may be missing.');
+      return;
+    }
+
     await bot.sendMessage(chatId, '🤔 Let me think about that...');
     
     const prompt = `You are an AI assistant helping users with AI-related questions. Please provide a helpful, accurate, and concise answer to this question: "${question}"
@@ -525,7 +595,13 @@ function createCatalogEntry(extractedData, categoryKey, originalUrl) {
 // Handle graceful shutdown
 process.on('SIGINT', () => {
   console.log('🛑 Bot shutting down...');
-  bot.stopPolling();
+  if (bot) {
+    try {
+      bot.stopPolling();
+    } catch (error) {
+      console.error('Error stopping bot polling:', error.message);
+    }
+  }
   server.close(() => {
     console.log('🌐 Health check server closed');
     process.exit(0);
@@ -534,7 +610,13 @@ process.on('SIGINT', () => {
 
 process.on('SIGTERM', () => {
   console.log('🛑 Bot received SIGTERM, shutting down...');
-  bot.stopPolling();
+  if (bot) {
+    try {
+      bot.stopPolling();
+    } catch (error) {
+      console.error('Error stopping bot polling:', error.message);
+    }
+  }
   server.close(() => {
     console.log('🌐 Health check server closed');
     process.exit(0);
